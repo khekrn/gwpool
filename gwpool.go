@@ -5,36 +5,35 @@ import (
 )
 
 type WorkerPool interface {
+	Initiate()
+
 	TrySubmit(task func()) bool
 
 	StopAndWait()
 }
 
 type bufferWorkerPool struct {
-	maxWorkers   int
-	maxCapacity  int
-	queue        chan func()
 	wg           sync.WaitGroup
 	stopChannels []chan struct{}
+	queue        chan func()
+	maxWorkers   int
+	maxCapacity  int
 }
 
-// StopAndWait implements WorkerPool.
-func (b *bufferWorkerPool) StopAndWait() {
-	for _, stop := range b.stopChannels {
-		close(stop)
+func New(maxWorkers, maxCapacity int) WorkerPool {
+	instance := &bufferWorkerPool{
+		maxWorkers:   maxWorkers,
+		maxCapacity:  maxCapacity,
+		queue:        make(chan func(), maxCapacity),
+		stopChannels: make([]chan struct{}, maxWorkers),
 	}
-	b.wg.Wait()
-	close(b.queue)
+	return instance
 }
 
-// TrySubmit implements WorkerPool.
-func (b *bufferWorkerPool) TrySubmit(task func()) bool {
-	if len(b.queue) >= b.maxCapacity {
-		return false
+func (b *bufferWorkerPool) Initiate() {
+	for i := 0; i < b.maxWorkers; i++ {
+		b.startWorker(i)
 	}
-
-	b.queue <- task
-	return true
 }
 
 func (b *bufferWorkerPool) startWorker(id int) {
@@ -59,17 +58,21 @@ func (b *bufferWorkerPool) startWorker(id int) {
 
 }
 
-func New(maxWorkers, maxCapacity int) WorkerPool {
-	instance := &bufferWorkerPool{
-		maxWorkers:   maxWorkers,
-		maxCapacity:  maxCapacity,
-		queue:        make(chan func(), maxCapacity),
-		stopChannels: make([]chan struct{}, maxWorkers),
+// StopAndWait implements WorkerPool.
+func (b *bufferWorkerPool) StopAndWait() {
+	for _, stop := range b.stopChannels {
+		close(stop)
+	}
+	b.wg.Wait()
+	close(b.queue)
+}
+
+// TrySubmit implements WorkerPool.
+func (b *bufferWorkerPool) TrySubmit(task func()) bool {
+	if len(b.queue) >= b.maxCapacity {
+		return false
 	}
 
-	for i := 1; i <= maxWorkers; i++ {
-		instance.startWorker(i)
-	}
-
-	return instance
+	b.queue <- task
+	return true
 }
