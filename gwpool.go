@@ -1,78 +1,103 @@
 package gwpool
 
 import (
+	"context"
 	"sync"
+	"time"
 )
 
+// WorkerPool represents a pool of workers
 type WorkerPool interface {
-	Initiate()
+	// AddTask adds a task to the pool
+	AddTask(t task)
 
-	TrySubmit(task func()) bool
+	// Wait waits for all the task to be complete
+	Wait()
 
-	StopAndWait()
+	// Release releases the pool and all it's workers
+	Release()
+
+	// WorkerCount returns total no of workers
+	WorkerCount() int
+
+	// QueueSize returns the size of the queue
+	QueueSize() int
 }
 
-type bufferWorkerPool struct {
-	wg           sync.WaitGroup
-	stopChannels []chan struct{}
-	queue        chan func()
-	maxWorkers   int
-	maxCapacity  int
+// task represents a function that will be executed by a worker
+type task func(ctx context.Context) error
+
+// workerPool represents a pool of workers
+type workerPool struct {
+	// Pointers and interfaces first (assume all are 8 bytes on a 64-bit system)
+	lock      sync.Locker
+	cond      *sync.Cond
+	workers   []chan task
+	taskQueue chan task
+	ctx       context.Context
+	// cancelFunc is used to cancel the context. It is called when Release() is called.
+	cancelFunc context.CancelFunc
+
+	// 64-bit integers (8 bytes each)
+	// adjustInterval is the interval to adjust the number of workers. Default is 1 second.
+	adjustInterval time.Duration
+	workerCount    int
+	minWorkers     int
+	maxWorkers     int
+	taskQueueSize  int
+	retryCount     int
 }
 
-func New(maxWorkers, maxCapacity int) WorkerPool {
-	instance := &bufferWorkerPool{
-		maxWorkers:   maxWorkers,
-		maxCapacity:  maxCapacity,
-		queue:        make(chan func(), maxCapacity),
-		stopChannels: make([]chan struct{}, maxWorkers),
+func (w *workerPool) AddTask(t task) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) Wait() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) Release() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) WorkerCount() int {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) QueueSize() int {
+	//TODO implement me
+	panic("implement me")
+}
+
+func NewWorkerPool(minWorkers, maxWorkers, queueSize int, options ...Option) WorkerPool {
+	ctx, cancel := context.WithCancel(context.Background())
+	pool := &workerPool{
+		lock:           &sync.Mutex{},
+		cond:           nil,
+		workers:        make([]chan task, minWorkers),
+		taskQueue:      make(chan task, queueSize),
+		ctx:            ctx,
+		cancelFunc:     cancel,
+		adjustInterval: 1 * time.Second,
+		workerCount:    minWorkers,
+		minWorkers:     minWorkers,
+		maxWorkers:     maxWorkers,
+		taskQueueSize:  queueSize,
+		retryCount:     0,
 	}
-	return instance
-}
 
-func (b *bufferWorkerPool) Initiate() {
-	for i := 0; i < b.maxWorkers; i++ {
-		b.startWorker(i)
-	}
-}
-
-func (b *bufferWorkerPool) startWorker(id int) {
-	b.wg.Add(1)
-	stop := make(chan struct{})
-	b.stopChannels[id] = stop
-
-	go func() {
-		defer b.wg.Done()
-		for {
-			select {
-			case function, ok := <-b.queue:
-				if !ok {
-					return
-				}
-				function()
-			case <-stop:
-				return
-			}
-		}
-	}()
-
-}
-
-// StopAndWait implements WorkerPool.
-func (b *bufferWorkerPool) StopAndWait() {
-	for _, stop := range b.stopChannels {
-		close(stop)
-	}
-	b.wg.Wait()
-	close(b.queue)
-}
-
-// TrySubmit implements WorkerPool.
-func (b *bufferWorkerPool) TrySubmit(task func()) bool {
-	if len(b.queue) >= b.maxCapacity {
-		return false
+	if pool.cond == nil {
+		pool.cond = sync.NewCond(pool.lock)
 	}
 
-	b.queue <- task
-	return true
+	// Applying options
+	for _, opt := range options {
+		opt(pool)
+	}
+
+	return pool
 }
