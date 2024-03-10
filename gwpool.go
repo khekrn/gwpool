@@ -3,101 +3,116 @@ package gwpool
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// WorkerPool represents a pool of workers
 type WorkerPool interface {
-	// AddTask adds a task to the pool
 	AddTask(t task)
-
-	// Wait waits for all the task to be complete
 	Wait()
-
-	// Release releases the pool and all it's workers
 	Release()
-
-	// WorkerCount returns total no of workers
 	WorkerCount() int
-
-	// QueueSize returns the size of the queue
 	QueueSize() int
 }
 
-// task represents a function that will be executed by a worker
 type task func(ctx context.Context) error
 
-// workerPool represents a pool of workers
 type workerPool struct {
-	// Pointers and interfaces first (assume all are 8 bytes on a 64-bit system)
-	lock      sync.Locker
-	cond      *sync.Cond
-	workers   []chan task
-	taskQueue chan task
-	ctx       context.Context
-	// cancelFunc is used to cancel the context. It is called when Release() is called.
-	cancelFunc context.CancelFunc
-
-	// 64-bit integers (8 bytes each)
-	// adjustInterval is the interval to adjust the number of workers. Default is 1 second.
+	lock           sync.Mutex
+	cond           *sync.Cond
+	taskQueue      chan task
+	ctx            context.Context
+	cancelFunc     context.CancelFunc
 	adjustInterval time.Duration
-	workerCount    int
+	workerCount    int32
 	minWorkers     int
 	maxWorkers     int
-	taskQueueSize  int
-	retryCount     int
+	activeTasks    int32
 }
 
-func (w *workerPool) AddTask(t task) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (w *workerPool) Wait() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (w *workerPool) Release() {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (w *workerPool) WorkerCount() int {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (w *workerPool) QueueSize() int {
-	//TODO implement me
-	panic("implement me")
-}
-
-func NewWorkerPool(minWorkers, maxWorkers, queueSize int, options ...Option) WorkerPool {
+func NewWorkerPool(minWorkers, maxWorkers, queueSize int) WorkerPool {
 	ctx, cancel := context.WithCancel(context.Background())
 	pool := &workerPool{
-		lock:           &sync.Mutex{},
-		cond:           nil,
-		workers:        make([]chan task, minWorkers),
 		taskQueue:      make(chan task, queueSize),
 		ctx:            ctx,
 		cancelFunc:     cancel,
 		adjustInterval: 1 * time.Second,
-		workerCount:    minWorkers,
 		minWorkers:     minWorkers,
 		maxWorkers:     maxWorkers,
-		taskQueueSize:  queueSize,
-		retryCount:     0,
+	}
+	pool.cond = sync.NewCond(&pool.lock)
+
+	for i := 0; i < minWorkers; i++ {
+		pool.addWorker()
 	}
 
-	if pool.cond == nil {
-		pool.cond = sync.NewCond(pool.lock)
-	}
-
-	// Applying options
-	for _, opt := range options {
-		opt(pool)
-	}
+	go pool.adjustWorkers()
 
 	return pool
+}
+
+func (w *workerPool) addWorker() {
+	atomic.AddInt32(&w.workerCount, 1)
+	go func() {
+		defer atomic.AddInt32(&w.workerCount, -1)
+		for {
+			select {
+			case task, ok := <-w.taskQueue:
+				if !ok {
+					return
+				}
+				atomic.AddInt32(&w.activeTasks, 1)
+				if err := task(w.ctx); err != nil {
+					// Log error or handle failed task scenario
+				}
+				atomic.AddInt32(&w.activeTasks, -1)
+				w.cond.Signal()
+			case <-w.ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (w *workerPool) AddTask(t task) {
+	w.taskQueue <- t
+}
+
+func (w *workerPool) Wait() {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	for atomic.LoadInt32(&w.activeTasks) > 0 || len(w.taskQueue) > 0 {
+		w.cond.Wait()
+	}
+}
+
+func (w *workerPool) Release() {
+	w.cancelFunc()
+	close(w.taskQueue)
+}
+
+func (w *workerPool) WorkerCount() int {
+	return int(atomic.LoadInt32(&w.workerCount))
+}
+
+func (w *workerPool) QueueSize() int {
+	return len(w.taskQueue)
+}
+
+func (w *workerPool) adjustWorkers() {
+	ticker := time.NewTicker(w.adjustInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if w.ctx.Err() != nil {
+			return
+		}
+
+		currentWorkers := w.WorkerCount()
+		queueLen := w.QueueSize()
+
+		if queueLen > 0 && currentWorkers < w.maxWorkers {
+			w.addWorker()
+		}
+	}
 }
