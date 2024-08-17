@@ -17,7 +17,7 @@ type WorkerPool interface {
 }
 
 // task definition
-type task func() error
+type task func()
 
 type workerPool struct {
 	workers        []*worker
@@ -28,15 +28,49 @@ type workerPool struct {
 	timeout        time.Duration
 	adjustInterval time.Duration
 
+	lock sync.Locker
+	cond *sync.Cond
+
 	maxWorkers    int
 	minWorkers    int
 	taskQueueSize int
 	retryCount    int
-
-	lock sync.Locker
-	cond *sync.Cond
 }
 
-func NewWorkerPool(minWorkers, maxWorkers, queueSize int) WorkerPool {
+func (w *workerPool) AddTask(t task) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) TryAddTask(t task) bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) Wait() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) Release() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) WorkerCount() int {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) QueueSize() int {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w *workerPool) adjustWorkers() {
+
+}
+
+func (w *workerPool) dispatch() {
 
 }
