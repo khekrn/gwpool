@@ -2,45 +2,51 @@ package main
 
 import (
 	"fmt"
-	v3 "github.com/khekrn/gwpool/v4"
+	"log"
+	"math/rand"
 	"time"
+
+	"github.com/khekrn/gwpool"
 )
 
 func main() {
-	maxWorkers := 10
-	//minWorkers := 2
-	taskQueueSize := 100
+	// Create a new worker pool with 5 maximum workers
+	pool := gwpool.NewWorkerPool(256,
+		gwpool.WithMinWorkers(64),
+		gwpool.WithTaskQueue(512),
+		gwpool.WithRetryCount(0),
+	)
 
-	// Create a new worker pool
-	pool := v3.NewGoPool(maxWorkers)
-	//pool := gwpool.NewWorkerPool(minWorkers, maxWorkers, taskQueueSize)
+	// Defer the release of the pool
 	defer pool.Release()
 
-	// Create a slice to store the results
-	results := make([]int, taskQueueSize)
-
-	// Add tasks to the pool
-	for i := 0; i < taskQueueSize; i++ {
+	// Add 20 sample tasks to the pool
+	for i := 0; i < 2048; i++ {
 		taskID := i
-		pool.AddTask(func() (interface{}, error) {
-			time.Sleep(100 * time.Millisecond)
-
-			// Store the result
-			results[taskID] = taskID
-
-			fmt.Printf("Task %d completed\n", taskID)
-			return nil, nil
+		pool.AddTask(func() error {
+			// Simulate work with a random duration
+			duration := time.Duration(rand.Intn(500)) * time.Millisecond
+			time.Sleep(duration)
+			log.Printf("Task %d completed after %v", taskID, duration)
+			fmt.Println("Total Workers = ", pool.WorkerCount(), " and Current Running = ", pool.Running())
+			return nil
 		})
 	}
 
-	// Wait for all tasks to be completed
+	fmt.Println("Loop Completed")
+
+	// Add a task that might fail and be retried
+	pool.AddTask(func() error {
+		if rand.Float32() < 0.5 {
+			log.Println("Task failed, will be retried")
+			return fmt.Errorf("random failure")
+		}
+		log.Println("Potentially failing task completed successfully")
+		return nil
+	})
+
+	// Wait for all tasks to complete
 	pool.Wait()
 
-	// Print the results
-	fmt.Println("Results:", results)
-
-	// Get pool statistics
-	fmt.Printf("Worker Count: %d\n", pool.WorkerCount())
-	fmt.Printf("Task Queue Size: %d\n", pool.TaskQueueSize())
-
+	fmt.Println("All tasks have been processed")
 }
