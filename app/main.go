@@ -11,9 +11,9 @@ import (
 
 func main() {
 	// Create a new worker pool with 5 maximum workers
-	pool := gwpool.NewWorkerPool(5,
-		gwpool.WithMinWorkers(2),
-		gwpool.WithTaskQueue(100),
+	pool := gwpool.NewWorkerPool(256,
+		gwpool.WithMinWorkers(64),
+		gwpool.WithTaskQueue(512),
 		gwpool.WithRetryCount(0),
 	)
 
@@ -21,16 +21,19 @@ func main() {
 	defer pool.Release()
 
 	// Add 20 sample tasks to the pool
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 2048; i++ {
 		taskID := i
 		pool.AddTask(func() error {
 			// Simulate work with a random duration
 			duration := time.Duration(rand.Intn(500)) * time.Millisecond
 			time.Sleep(duration)
 			log.Printf("Task %d completed after %v", taskID, duration)
+			fmt.Println("Total Workers = ", pool.WorkerCount(), " and Current Running = ", pool.Running())
 			return nil
 		})
 	}
+
+	fmt.Println("Loop Completed")
 
 	// Add a task that might fail and be retried
 	pool.AddTask(func() error {

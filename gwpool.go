@@ -2,6 +2,7 @@ package gwpool
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -12,6 +13,7 @@ type WorkerPool interface {
 	TryAddTask(t task) bool
 	Wait()
 	Release()
+	Running() int
 	WorkerCount() int
 	QueueSize() int
 }
@@ -72,7 +74,7 @@ func NewWorkerPool(maxWorkers int, opts ...Option) WorkerPool {
 		pool.workerStack[i] = i
 		worker.start(pool, i)
 	}
-	//go pool.adjustWorkers()
+	go pool.adjustWorkers()
 	go pool.dispatch()
 	return pool
 }
@@ -121,16 +123,47 @@ func (w *workerPool) Release() {
 
 	w.workers = nil
 	w.workerStack = nil
+
+	// close(w.taskQueue)
+	// w.cancelFunc()
+
+	// // Wait for all tasks to be processed
+	// w.Wait()
+
+	// w.cond.L.Lock()
+	// // Close all worker queues
+	// for _, worker := range w.workers {
+	// 	close(worker.workerQueue)
+	// }
+	// w.cond.L.Unlock()
+
+	// // Wait for all workers to finish
+	// w.cond.L.Lock()
+	// for len(w.workerStack) != len(w.workers) {
+	// 	w.cond.Wait()
+	// }
+	// w.cond.L.Unlock()
+
+	// w.workers = nil
+	// w.workerStack = nil
+}
+
+func (w *workerPool) Running() int {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	return len(w.workers) - len(w.workerStack)
 }
 
 func (w *workerPool) WorkerCount() int {
-	//TODO implement me
-	panic("implement me")
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	return len(w.workers)
 }
 
 func (w *workerPool) QueueSize() int {
-	//TODO implement me
-	panic("implement me")
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	return len(w.taskQueue)
 }
 
 func (w *workerPool) pushWorker(workerIndex int) {
@@ -149,8 +182,38 @@ func (w *workerPool) popWorker() int {
 }
 
 func (w *workerPool) adjustWorkers() {
+	ticker := time.NewTicker(w.adjustInterval)
+	defer ticker.Stop()
+
+	var adjustFlag bool
 	for {
-		time.Sleep(1 * time.Second)
+		adjustFlag = false
+		select {
+		case <-ticker.C:
+			w.cond.L.Lock()
+			if len(w.taskQueue) > len(w.workers)*3/4 && len(w.workers) < w.maxWorkers {
+				adjustFlag = true
+				newWorkers := min(len(w.workers)*2, w.maxWorkers) - len(w.workers)
+				for i := 0; i < newWorkers; i++ {
+					worker := newWorker()
+					w.workers = append(w.workers, worker)
+					w.workerStack = append(w.workerStack, len(w.workers)-1)
+					worker.start(w, len(w.workers)-1)
+				}
+			} else if len(w.taskQueue) == 0 && len(w.workerStack) == len(w.workers) && len(w.workers) > w.minWorkers {
+				adjustFlag = true
+				removeWorkers := (len(w.workers) - w.minWorkers + 1) / 2
+				sort.Ints(w.workerStack)
+				w.workers = w.workers[:len(w.workers)-removeWorkers]
+				w.workerStack = w.workerStack[:len(w.workerStack)-removeWorkers]
+			}
+			w.cond.L.Unlock()
+			if adjustFlag {
+				w.cond.Broadcast()
+			}
+		case <-w.ctx.Done():
+			return
+		}
 	}
 }
 
