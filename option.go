@@ -19,6 +19,12 @@ func WithTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithAutoScaling(autoScaling bool) Option {
+	return func(wp *workerPool) {
+		wp.autoScaling = autoScaling
+	}
+}
+
 func WithAdjustInterval(adjustInterval time.Duration) Option {
 	return func(wp *workerPool) {
 		wp.adjustInterval = adjustInterval

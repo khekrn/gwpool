@@ -23,14 +23,17 @@ func main() {
 	// Add 20 sample tasks to the pool
 	for i := 0; i < 2048; i++ {
 		taskID := i
-		pool.AddTask(func() error {
+		result := pool.TryAddTask(func() error {
 			// Simulate work with a random duration
 			duration := time.Duration(rand.Intn(500)) * time.Millisecond
 			time.Sleep(duration)
-			log.Printf("Task %d completed after %v", taskID, duration)
-			fmt.Println("Total Workers = ", pool.WorkerCount(), " and Current Running = ", pool.Running())
+			log.Printf("Task %d completed after %v, workers = %d and current =%d\n", taskID, duration, pool.WorkerCount(), pool.Running())
 			return nil
 		})
+		if !result {
+			fmt.Println("Not enough workers = ", result, taskID)
+			time.Sleep(5 * time.Second)
+		}
 	}
 
 	fmt.Println("Loop Completed")
