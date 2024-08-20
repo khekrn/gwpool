@@ -48,6 +48,8 @@ type workerPool struct {
 	taskQueueSize int
 	// Set by WithRetryCount(), used to retry a task when it fails. Default is 0.
 	retryCount int
+	// Set by WithDynamicScaling(), used to adjust the workers scale up and down
+	autoScaling bool
 }
 
 // NewWorkerPool creates a new pool of workers
@@ -71,21 +73,28 @@ func NewWorkerPool(maxWorkers int, opts ...Option) WorkerPool {
 		opt(pool)
 	}
 
+	totalWorkers := pool.minWorkers
+	if !pool.autoScaling {
+		totalWorkers = pool.maxWorkers
+	}
+
 	pool.taskQueue = make(chan task, pool.taskQueueSize)
-	pool.workers = make([]*worker, pool.minWorkers)
-	pool.workerStack = make([]int, pool.minWorkers)
+	pool.workers = make([]*worker, totalWorkers)
+	pool.workerStack = make([]int, totalWorkers)
 
 	if pool.cond == nil {
 		pool.cond = sync.NewCond(pool.lock)
 	}
 	// Create workers with the minimum number. Don't use pushWorker() here.
-	for i := 0; i < pool.minWorkers; i++ {
+	for i := 0; i < totalWorkers; i++ {
 		worker := newWorker()
 		pool.workers[i] = worker
 		pool.workerStack[i] = i
 		worker.start(pool, i)
 	}
-	go pool.adjustWorkers()
+	if pool.autoScaling {
+		go pool.adjustWorkers()
+	}
 	go pool.dispatch()
 	return pool
 }
