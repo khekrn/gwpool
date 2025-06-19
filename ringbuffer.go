@@ -38,9 +38,65 @@ func NewRingBuffer[T any](capacity int) *RingBuffer[T] {
 // It calculates the length by comparing the head and tail indices.
 // The length is computed as the difference between tail and head,
 // masked by the capacity to ensure it wraps correctly.
-// This method is lock-free and can be called concurrently.
 func (r *RingBuffer[T]) Len() int {
 	head := atomic.LoadUint64(&r.head)
 	tail := atomic.LoadUint64(&r.tail)
 	return int((tail - head) & r.capMask)
+}
+
+// Enqueue adds an item to the ring buffer.
+// It atomically checks if there is space available in the buffer.
+// If the buffer is full, it returns false.
+// If there is space, it increments the tail index and stores the item.
+func (r *RingBuffer[T]) Enqueue(item T) bool {
+	var tail uint64
+	for {
+		// Load the current tail index atomically
+		tail = atomic.LoadUint64(&r.tail)
+
+		// Load the current head index atomically
+		head := atomic.LoadUint64(&r.head)
+
+		// Check if the buffer is full
+		// If (tail + 1) & capMask == head & capMask, the buffer is full
+		if (tail+1)&r.capMask == head&r.capMask {
+			// Buffer is full, cannot enqueue
+			return false
+		}
+
+		// Try to automatically increment the tail index
+		if atomic.CompareAndSwapUint64(&r.tail, tail, tail+1) {
+			break
+		}
+	}
+
+	// Store the item in the buffer at the tail index
+	r.buf[tail&r.capMask] = item
+	return true
+}
+
+func (r *RingBuffer[T]) Dequeue() (T, bool) {
+	var head uint64
+	var zero T // Zero value of type T to return when the buffer is empty
+	for {
+		// Load the current head index atomically
+		head = atomic.LoadUint64(&r.head)
+
+		// Load the current tail index atomically
+		tail := atomic.LoadUint64(&r.tail)
+
+		// Check if the buffer is empty
+		// If head == tail, the buffer is empty
+		if head == tail {
+			// Buffer is empty, cannot dequeue
+			return zero, false
+		}
+
+		// Try to automatically increment the head index
+		if atomic.CompareAndSwapUint64(&r.head, head, head+1) {
+			break
+		}
+	}
+	value := r.buf[head&r.capMask]
+	return value, true
 }
