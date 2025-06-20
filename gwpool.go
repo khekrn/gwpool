@@ -67,12 +67,9 @@ func NewWorkerPool(maxWorkers int, opts ...Option) WorkerPool {
 }
 
 func (p *fixedWorkerPool) TryAddTask(t Task) bool {
-	if atomic.LoadUint64(&p.runningTasks) >= uint64(p.maxWorkers-1) {
-		return false // Reject task if running tasks exceed max workers
-	}
-	for !p.taskQueue.Enqueue(t) {
-	}
-	return true
+	// Try to enqueue the task to the ring buffer
+	// If the queue is full, return false
+	return p.taskQueue.Enqueue(t)
 }
 
 func (p *fixedWorkerPool) Wait() {

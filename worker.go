@@ -27,7 +27,7 @@ func (w *worker) start() {
 		for t := range w.taskChan {
 			atomic.AddUint64(&w.pool.runningTasks, 1)
 			w.executeTask(t)
-			atomic.AddUint64(&w.pool.runningTasks, ^uint64(0)) //
+			atomic.AddUint64(&w.pool.runningTasks, ^uint64(0)) // Subtract 1 using two's complement
 		}
 	}()
 }
@@ -39,8 +39,16 @@ func (w *worker) stop() {
 }
 
 func (w *worker) executeTask(t Task) {
-	ctx, cancel := context.WithTimeout(context.Background(), w.pool.timeout)
-	defer cancel()
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	// Only create timeout context if timeout is set
+	if w.pool.timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), w.pool.timeout)
+		defer cancel()
+	} else {
+		ctx = context.Background()
+	}
 
 	for i := 0; i <= w.pool.retryCount; i++ {
 		select {
