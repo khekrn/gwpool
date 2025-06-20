@@ -130,4 +130,30 @@ func (p *fixedWorkerPool) dispatch() {
 			}
 		}
 	}
+	// for {
+	// 	select {
+	// 	case <-p.ctx.Done():
+	// 		return
+	// 	default:
+	// 		task, ok := p.taskQueue.Dequeue()
+	// 		if !ok {
+	// 			time.Sleep(10 * time.Millisecond)
+	// 			continue
+	// 		}
+
+	// 		// YOUR OPTIMIZATION: Check before send
+	// 		delivered := false
+	// 		for _, w := range p.workers {
+	// 			if len(w.taskChan) == 0 { // Channel has space
+	// 				w.taskChan <- task // Guaranteed to succeed!
+	// 				delivered = true
+	// 				break
+	// 			}
+	// 		}
+
+	// 		if !delivered {
+	// 			p.taskQueue.Enqueue(task)
+	// 		}
+	// 	}
+	// }
 }
