@@ -22,7 +22,7 @@ type WorkerPool interface {
 type fixedWorkerPool struct {
 	workers       []*worker
 	taskQueue     *RingBuffer[Task]
-	cancelFunc    context.CancelFunc
+	cancel        context.CancelFunc
 	ctx           context.Context
 	runningTasks  uint64
 	timeout       time.Duration
@@ -30,26 +30,6 @@ type fixedWorkerPool struct {
 	maxWorkers    int
 	retryCount    int
 }
-
-// worker represents a single worker in the worker pool.
-// It has a channel to receive tasks and a reference to the worker pool.
-type worker struct {
-	// Reference to the worker pool
-	pool *fixedWorkerPool
-	// Channel to receive tasks
-	taskChan chan Task
-}
-
-func newWorker(pool *fixedWorkerPool) *worker {
-	w := &worker{
-		pool:     pool,
-		taskChan: make(chan Task),
-	}
-
-	return w
-}
-
-func (w *worker) start() {}
 
 func NewWorkerPool(maxWorkers int, opts ...Option) WorkerPool {
 	if maxWorkers <= 0 {
@@ -62,7 +42,7 @@ func NewWorkerPool(maxWorkers int, opts ...Option) WorkerPool {
 		retryCount: 0,
 		timeout:    0,
 		ctx:        ctx,
-		cancelFunc: cancel,
+		cancel:     cancel,
 	}
 
 	for _, opt := range opts {
@@ -87,15 +67,28 @@ func NewWorkerPool(maxWorkers int, opts ...Option) WorkerPool {
 }
 
 func (p *fixedWorkerPool) TryAddTask(t Task) bool {
-	return false
+	if atomic.LoadUint64(&p.runningTasks) >= uint64(p.maxWorkers-1) {
+		return false // Reject task if running tasks exceed max workers
+	}
+	for !p.taskQueue.Enqueue(t) {
+	}
+	return true
 }
 
 func (p *fixedWorkerPool) Wait() {
-
+	for atomic.LoadUint64(&p.runningTasks) > 0 || p.taskQueue.Len() > 0 {
+		time.Sleep(50 * time.Millisecond) // Wait for tasks to complete
+	}
 }
 
 func (p *fixedWorkerPool) Release() {
-
+	p.cancel()
+	for _, w := range p.workers {
+		w.stop()
+	}
+	p.workers = nil
+	p.taskQueue = nil
+	atomic.StoreUint64(&p.runningTasks, 0)
 }
 
 func (p *fixedWorkerPool) Running() int {
@@ -110,4 +103,34 @@ func (p *fixedWorkerPool) QueueSize() int {
 	return p.taskQueue.Len()
 }
 
-func (p *fixedWorkerPool) dispatch() {}
+func (p *fixedWorkerPool) dispatch() {
+	for {
+		select {
+		case <-p.ctx.Done():
+			return // Exit if the context is cancelled
+		default:
+			task, ok := p.taskQueue.Dequeue()
+			if !ok {
+				time.Sleep(10 * time.Millisecond) // Sleep briefly if no task is available
+				continue
+			}
+
+			delivered := false
+		outerLoop:
+			for _, w := range p.workers {
+				select {
+				case w.taskChan <- task:
+					delivered = true
+					break outerLoop // Task delivered to a worker
+				default:
+					// Worker is busy, try the next one
+					continue
+				}
+			}
+			if !delivered {
+				// If no worker was available, re-enqueue the task
+				p.taskQueue.Enqueue(task)
+			}
+		}
+	}
+}
