@@ -3,6 +3,7 @@ package gwpool
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -458,4 +459,112 @@ func TestDifferentQueueSizes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// BenchmarkGwPoolHttpIO benchmarks the worker pool with HTTP I/O tasks
+func BenchmarkGwPoolHttpIO(b *testing.B) {
+	pool := NewWorkerPool(100) // More workers for I/O bound tasks
+	defer pool.Release()
+
+	// HTTP client for making requests
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Task that makes HTTP request to simulate I/O
+	httpTask := func() error {
+		resp, err := client.Get("http://localhost:8080/io-task?delay=5000")
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("HTTP error: %d", resp.StatusCode)
+		}
+		return nil
+	}
+
+	// Run at least 5000 iterations as requested
+	iterations := 5000
+	if b.N > iterations {
+		iterations = b.N
+	}
+
+	b.ResetTimer()
+	for i := 0; i < iterations; i++ {
+		if !pool.TryAddTask(httpTask) {
+			// If queue is full, wait a bit and retry
+			time.Sleep(time.Millisecond)
+			i-- // Retry this iteration
+		}
+	}
+	pool.Wait()
+	b.StopTimer()
+}
+
+// BenchmarkDirectHttpIO benchmarks direct HTTP calls without worker pool
+func BenchmarkDirectHttpIO(b *testing.B) {
+	var wg sync.WaitGroup
+
+	// HTTP client for making requests
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Run at least 5000 iterations as requested
+	iterations := 5000
+	if b.N > iterations {
+		iterations = b.N
+	}
+
+	b.ResetTimer()
+	wg.Add(iterations)
+	for i := 0; i < iterations; i++ {
+		go func() {
+			defer wg.Done()
+			resp, err := client.Get("http://localhost:8080/io-task?delay=5000")
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+		}()
+	}
+	wg.Wait()
+	b.StopTimer()
+}
+
+// BenchmarkLimitedGoroutinesHttpIO benchmarks limited goroutines with HTTP I/O
+func BenchmarkLimitedGoroutinesHttpIO(b *testing.B) {
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 100) // Limit to 100 concurrent goroutines
+
+	// HTTP client for making requests
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Run at least 5000 iterations as requested
+	iterations := 5000
+	if b.N > iterations {
+		iterations = b.N
+	}
+
+	b.ResetTimer()
+	wg.Add(iterations)
+	for i := 0; i < iterations; i++ {
+		go func() {
+			defer wg.Done()
+			semaphore <- struct{}{}        // Acquire semaphore
+			defer func() { <-semaphore }() // Release semaphore
+
+			resp, err := client.Get("http://localhost:8080/io-task?delay=5000")
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+		}()
+	}
+	wg.Wait()
+	b.StopTimer()
 }
