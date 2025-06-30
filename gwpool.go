@@ -2,6 +2,7 @@ package gwpool
 
 import (
 	"context"
+	"runtime"
 	"sync/atomic"
 	"time"
 )
@@ -11,7 +12,8 @@ import (
 type Task func() error
 
 type WorkerPool interface {
-	TryAddTask(t Task) bool
+	AddTask(t Task)         // Blocking version - guarantees task delivery
+	TryAddTask(t Task) bool // Non-blocking version - may fail if queue full
 	Wait()
 	Release()
 	Running() int
@@ -64,6 +66,14 @@ func NewWorkerPool(maxWorkers int, opts ...Option) WorkerPool {
 
 	go pool.dispatch()
 	return pool
+}
+
+func (p *fixedWorkerPool) AddTask(t Task) {
+	// Blocking version - guarantees task will be added
+	for !p.taskQueue.Enqueue(t) {
+		// Queue full, wait and retry (never drop the task)
+		runtime.Gosched()
+	}
 }
 
 func (p *fixedWorkerPool) TryAddTask(t Task) bool {

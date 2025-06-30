@@ -11,10 +11,12 @@ import (
 
 func main() {
 	// Create a new worker pool with 256 maximum workers
-	pool := gwpool.NewWorkerPool(64,
-		gwpool.WithTaskQueueSize(128),
-		gwpool.WithRetryCount(0),
-	)
+	// pool := gwpool.NewWorkerPool(64,
+	// 	gwpool.WithTaskQueueSize(128),
+	// 	gwpool.WithRetryCount(0),
+	// )
+
+	pool := gwpool.NewIOWorkerPool(64, 128)
 
 	fmt.Printf("Created worker pool with %d workers and queue size %d\n", pool.WorkerCount(), 512)
 
