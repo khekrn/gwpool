@@ -2,11 +2,10 @@ package main
 
 import (
 	"fmt"
+	"github.com/khekrn/gwpool"
 	"log"
 	"math/rand"
 	"time"
-
-	"github.com/khekrn/gwpool"
 )
 
 func main() {
@@ -16,7 +15,11 @@ func main() {
 	// 	gwpool.WithRetryCount(0),
 	// )
 
-	pool := gwpool.NewIOWorkerPool(64, 128)
+	// Use the factory method to create a channel-based worker pool
+	pool := gwpool.NewWorkerPool(64, 128, gwpool.RingBufferPool)
+
+	// Alternatively, you can create a ringbuffer-based worker pool
+	// pool := factory.NewWorkerPool(64, 128, factory.RingBufferPool)
 
 	fmt.Printf("Created worker pool with %d workers and queue size %d\n", pool.WorkerCount(), 512)
 
@@ -27,25 +30,24 @@ func main() {
 	tasksAdded := 0
 	for i := 0; i < 512; i++ {
 		taskID := i
-		for {
-			result := pool.TryAddTask(func() error {
-				// Simulate work with a random duration
-				duration := time.Duration(rand.Intn(1000)) * time.Millisecond
-				time.Sleep(duration)
-				log.Printf("Task %d completed after %v, workers = %d and current =%d\n", taskID, duration, pool.WorkerCount(), pool.Running())
-				return nil
-			})
-			if result {
-				tasksAdded++
-				if tasksAdded%100 == 0 {
-					fmt.Printf("Added %d tasks so far, queue size: %d, running: %d\n", tasksAdded, pool.QueueSize(), pool.Running())
-				}
-				break // Task was successfully added
+
+		result := pool.TryAddTask(func() error {
+			// Simulate work with a random duration
+			duration := time.Duration(rand.Intn(1000)) * time.Millisecond
+			time.Sleep(duration)
+			log.Printf("Task %d completed after %v, workers = %d and current =%d\n", taskID, duration, pool.WorkerCount(), pool.Running())
+			return nil
+		})
+		if result {
+			tasksAdded++
+			if tasksAdded%100 == 0 {
+				fmt.Printf("Added %d tasks so far, queue size: %d, running: %d\n", tasksAdded, pool.QueueSize(), pool.Running())
 			}
-			// Queue is full, wait a bit and retry
-			fmt.Printf("Queue full for task %d, retrying...\n", taskID)
-			time.Sleep(10 * time.Millisecond)
+			//break // Task was successfully added
 		}
+		// Queue is full, wait a bit and retry
+		//fmt.Printf("Queue full for task %d, retrying...\n", taskID)
+		//time.Sleep(200 * time.Millisecond)
 	}
 
 	fmt.Printf("Loop Completed - Added %d tasks total\n", tasksAdded)

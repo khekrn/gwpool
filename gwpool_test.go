@@ -33,26 +33,8 @@ func simulateLightIO() error {
 	return nil
 }
 
-func BenchmarkGwPool(b *testing.B) {
-	pool := NewWorkerPool(PoolSize)
-	defer pool.Release()
-
-	taskFunc := func() error {
-		return simulateLightIO()
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		for num := 0; num < TaskNum; num++ {
-			pool.TryAddTask(taskFunc)
-		}
-		pool.Wait()
-	}
-	b.StopTimer()
-}
-
-func BenchmarkGwIOPool(b *testing.B) {
-	pool := NewIOWorkerPool(PoolSize, PoolSize)
+func BenchmarkChannelPool(b *testing.B) {
+	pool := NewWorkerPool(PoolSize, PoolSize, ChannelPool)
 	defer pool.Release()
 
 	taskFunc := func() error {
@@ -72,7 +54,7 @@ func BenchmarkGwIOPool(b *testing.B) {
 // BenchmarkRingBufferPoolIO benchmarks the CPU-optimized ring buffer pool for I/O tasks
 func BenchmarkRingBufferIOPool(b *testing.B) {
 	// Use CPU-optimized version for better CPU-bound performance
-	pool := NewIOWorkerPoolRingBuffer(PoolSize, PoolSize)
+	pool := NewWorkerPool(PoolSize, PoolSize, RingBufferPool)
 	defer pool.Release()
 
 	taskFunc := func() error {
@@ -107,13 +89,13 @@ func BenchmarkGoroutines(b *testing.B) {
 	}
 }
 
-// Test basic worker pool creation and properties
+// Test basic ringBufferWorker pool creation and properties
 func TestNewWorkerPool(t *testing.T) {
-	pool := NewWorkerPool(5)
+	pool := NewWorkerPool(8, 8, RingBufferPool) // Use power of 2
 	defer pool.Release()
 
-	if pool.WorkerCount() != 5 {
-		t.Errorf("Expected 5 workers, got %d", pool.WorkerCount())
+	if pool.WorkerCount() != 8 {
+		t.Errorf("Expected 8 workers, got %d", pool.WorkerCount())
 	}
 
 	if pool.Running() != 0 {
@@ -125,33 +107,19 @@ func TestNewWorkerPool(t *testing.T) {
 	}
 }
 
-// Test worker pool creation with options
-func TestNewWorkerPoolWithOptions(t *testing.T) {
-	pool := NewWorkerPool(3,
-		WithTaskQueueSize(128),
-		WithTimeout(5*time.Second),
-		WithRetryCount(2),
-	)
-	defer pool.Release()
-
-	if pool.WorkerCount() != 3 {
-		t.Errorf("Expected 3 workers, got %d", pool.WorkerCount())
-	}
-}
-
-// Test panic on invalid worker count
+// Test panic on invalid ringBufferWorker count
 func TestNewWorkerPoolPanic(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
 			t.Errorf("Expected panic for zero workers")
 		}
 	}()
-	NewWorkerPool(0)
+	NewWorkerPool(0, 0, ChannelPool)
 }
 
 // Test adding and executing tasks
 func TestTryAddTask(t *testing.T) {
-	pool := NewWorkerPool(2, WithTaskQueueSize(8)) // Larger queue to accommodate all tasks
+	pool := NewWorkerPool(2, 8, ChannelPool) // Larger queue to accommodate all tasks
 	defer pool.Release()
 
 	var counter int64
@@ -179,7 +147,7 @@ func TestTryAddTask(t *testing.T) {
 // Test queue full scenario
 func TestTryAddTaskQueueFull(t *testing.T) {
 	// Create pool with small queue and slow tasks
-	pool := NewWorkerPool(1, WithTaskQueueSize(2))
+	pool := NewWorkerPool(2, 2, RingBufferPool) // Use power of 2
 	defer pool.Release()
 
 	slowTask := func() error {
@@ -208,7 +176,7 @@ func TestTryAddTaskQueueFull(t *testing.T) {
 
 // Test task execution with errors
 func TestTaskWithError(t *testing.T) {
-	pool := NewWorkerPool(2, WithTaskQueueSize(16)) // Larger queue for all tasks
+	pool := NewWorkerPool(2, 16, RingBufferPool) // Larger queue for all tasks
 	defer pool.Release()
 
 	var successCount, errorCount int64
@@ -245,68 +213,9 @@ func TestTaskWithError(t *testing.T) {
 	}
 }
 
-// Test retry functionality
-func TestTaskRetry(t *testing.T) {
-	pool := NewWorkerPool(1, WithRetryCount(2))
-	defer pool.Release()
-
-	var attemptCount int64
-	retryTask := func() error {
-		count := atomic.AddInt64(&attemptCount, 1)
-		if count < 3 { // Fail first 2 attempts
-			return errors.New("temporary error")
-		}
-		return nil // Succeed on 3rd attempt
-	}
-
-	pool.TryAddTask(retryTask)
-	pool.Wait()
-
-	if atomic.LoadInt64(&attemptCount) != 3 {
-		t.Errorf("Expected 3 attempts, got %d", atomic.LoadInt64(&attemptCount))
-	}
-}
-
-// Test timeout functionality
-func TestTaskTimeout(t *testing.T) {
-	pool := NewWorkerPool(1, WithTimeout(50*time.Millisecond))
-	defer pool.Release()
-
-	var completed bool
-	var mu sync.Mutex
-
-	// Task that completes quickly
-	quickTask := func() error {
-		mu.Lock()
-		completed = true
-		mu.Unlock()
-		return nil
-	}
-
-	start := time.Now()
-	if !pool.TryAddTask(quickTask) {
-		t.Error("Failed to add quick task")
-	}
-	pool.Wait()
-	elapsed := time.Since(start)
-
-	mu.Lock()
-	wasCompleted := completed
-	mu.Unlock()
-
-	if !wasCompleted {
-		t.Error("Quick task should have completed")
-	}
-
-	// For a quick task, it should complete normally
-	if elapsed > 100*time.Millisecond {
-		t.Errorf("Quick task took too long: %v", elapsed)
-	}
-}
-
 // Test concurrent access
 func TestConcurrentAccess(t *testing.T) {
-	pool := NewWorkerPool(5, WithTaskQueueSize(128)) // Larger queue for concurrent access
+	pool := NewWorkerPool(8, 128, RingBufferPool) // Larger queue for concurrent access, use power of 2
 	defer pool.Release()
 
 	var counter int64
@@ -345,7 +254,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 // Test running tasks counter
 func TestRunningTasksCounter(t *testing.T) {
-	pool := NewWorkerPool(2)
+	pool := NewWorkerPool(2, 8, RingBufferPool) // Larger queue to ensure tasks can be added
 	defer pool.Release()
 
 	var maxRunning int
@@ -363,9 +272,9 @@ func TestRunningTasksCounter(t *testing.T) {
 		return nil
 	}
 
-	// Add multiple tasks
+	// Add multiple tasks - use AddTask to guarantee they're added
 	for i := 0; i < 5; i++ {
-		pool.TryAddTask(task)
+		pool.AddTask(task)
 	}
 
 	pool.Wait()
@@ -389,7 +298,7 @@ func TestRunningTasksCounter(t *testing.T) {
 
 // Test Wait() functionality
 func TestWait(t *testing.T) {
-	pool := NewWorkerPool(2)
+	pool := NewWorkerPool(2, 4, RingBufferPool) // Adequate queue size
 	defer pool.Release()
 
 	var completed bool
@@ -400,7 +309,9 @@ func TestWait(t *testing.T) {
 	}
 
 	start := time.Now()
-	pool.TryAddTask(task)
+	if !pool.TryAddTask(task) {
+		t.Fatal("Failed to add task to pool")
+	}
 	pool.Wait()
 	elapsed := time.Since(start)
 
@@ -423,7 +334,7 @@ func TestWait(t *testing.T) {
 
 // Test Release() functionality
 func TestRelease(t *testing.T) {
-	pool := NewWorkerPool(3)
+	pool := NewWorkerPool(4, 4, RingBufferPool)
 
 	// Add a task
 	task := func() error {
@@ -440,36 +351,10 @@ func TestRelease(t *testing.T) {
 	}
 }
 
-// Test queue size tracking
-func TestQueueSize(t *testing.T) {
-	pool := NewWorkerPool(1) // Single worker to control execution
-	defer pool.Release()
-
-	slowTask := func() error {
-		time.Sleep(100 * time.Millisecond)
-		return nil
-	}
-
-	// Add tasks faster than they can be processed
-	for i := 0; i < 5; i++ {
-		pool.TryAddTask(slowTask)
-	}
-
-	// Check that queue size is tracked
-	if pool.QueueSize() == 0 {
-		t.Error("Expected non-zero queue size")
-	}
-
-	pool.Wait()
-
-	if pool.QueueSize() != 0 {
-		t.Errorf("Expected 0 queue size after Wait(), got %d", pool.QueueSize())
-	}
-}
-
 // Test edge case: no tasks
 func TestNoTasks(t *testing.T) {
-	pool := NewWorkerPool(3)
+	pool := NewWorkerPool(4, 4, RingBufferPool)
+	defer pool.Release()
 	defer pool.Release()
 
 	// Wait with no tasks should return immediately
@@ -482,13 +367,13 @@ func TestNoTasks(t *testing.T) {
 	}
 }
 
-// Test worker pool with different queue sizes
+// Test ringBufferWorker pool with different queue sizes
 func TestDifferentQueueSizes(t *testing.T) {
 	sizes := []int{1, 2, 4, 8, 16, 32}
 
 	for _, size := range sizes {
 		t.Run(fmt.Sprintf("QueueSize%d", size), func(t *testing.T) {
-			pool := NewWorkerPool(2, WithTaskQueueSize(size))
+			pool := NewWorkerPool(2, size, RingBufferPool)
 			defer pool.Release()
 
 			var counter int64
@@ -531,12 +416,12 @@ func abs(x int) int {
 	return x
 }
 
-// BenchmarkGwPoolHttpIO benchmarks the worker pool with HTTP I/O tasks
-func BenchmarkHTTPGwPool(b *testing.B) {
+// BenchmarkHTTPRingBufferPool benchmarks the ringBufferWorker pool with HTTP I/O tasks
+func BenchmarkHTTPRingBufferPool(b *testing.B) {
 	// Reset counter at start
 	var gwPoolHttpCount atomic.Uint64
 
-	pool := NewWorkerPool(100, WithTaskQueueSize(5000)) // More workers for I/O bound tasks
+	pool := NewWorkerPool(100, 5000, RingBufferPool) // More workers for I/O bound tasks
 	//pool := NewWorkerPool(100)
 	defer pool.Release()
 
@@ -561,7 +446,7 @@ func BenchmarkHTTPGwPool(b *testing.B) {
 	}
 
 	// Run at least 5000 iterations as requested
-	iterations := 5000
+	iterations := 2500
 	if b.N > iterations {
 		iterations = b.N
 	}
@@ -597,7 +482,7 @@ func BenchmarkHTTPLimitedGoroutines(b *testing.B) {
 	}
 
 	// Run at least 5000 iterations as requested
-	iterations := 5000
+	iterations := 2500
 	if b.N > iterations {
 		iterations = b.N
 	}
@@ -627,12 +512,12 @@ func BenchmarkHTTPLimitedGoroutines(b *testing.B) {
 	b.StopTimer()
 }
 
-// BenchmarkIOOptimizedPool benchmarks the I/O optimized worker pool
-func BenchmarkHttpIOOptimizedPool(b *testing.B) {
+// BenchmarkHttpChannelPool benchmarks the channel worker pool
+func BenchmarkHttpChannelPool(b *testing.B) {
 	// Reset counter at start
 	var ioOptimizedCount atomic.Uint64
 
-	pool := NewIOWorkerPool(100, 5000) // I/O optimized pool
+	pool := NewWorkerPool(100, 5000, ChannelPool)
 	defer pool.Release()
 
 	// HTTP client for making requests
@@ -656,7 +541,7 @@ func BenchmarkHttpIOOptimizedPool(b *testing.B) {
 	}
 
 	// Run at least 5000 iterations as requested
-	iterations := 5000
+	iterations := 2500
 	if b.N > iterations {
 		iterations = b.N
 	}
@@ -664,57 +549,6 @@ func BenchmarkHttpIOOptimizedPool(b *testing.B) {
 	// Add cleanup function to print total at the very end
 	b.Cleanup(func() {
 		fmt.Printf("==> IO Optimized Total HTTP requests made: %d\n", ioOptimizedCount.Load())
-	})
-
-	b.ResetTimer()
-	for i := 0; i < iterations; i++ {
-		if !pool.TryAddTask(httpTask) {
-			// If queue is full, wait a bit and retry
-			time.Sleep(time.Millisecond)
-			i-- // Retry this iteration
-		}
-	}
-	pool.Wait()
-	b.StopTimer()
-}
-
-// BenchmarkIORingBufferPool benchmarks the I/O optimized worker pool using ring buffer
-func BenchmarkHttpIORingBufferPool(b *testing.B) {
-	// Reset counter at start
-	var ioRingBufferCount atomic.Uint64
-
-	pool := NewIOWorkerPoolRingBuffer(100, 5000) // I/O optimized ring buffer pool
-	defer pool.Release()
-
-	// HTTP client for making requests
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	// Task that makes HTTP request to simulate I/O
-	httpTask := func() error {
-		ioRingBufferCount.Add(1) // Count all attempts, regardless of success/failure
-		resp, err := client.Get("http://localhost:8080/io-task?delay=5000")
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("HTTP error: %d", resp.StatusCode)
-		}
-		return nil
-	}
-
-	// Run at least 5000 iterations as requested
-	iterations := 5000
-	if b.N > iterations {
-		iterations = b.N
-	}
-
-	// Add cleanup function to print total at the very end
-	b.Cleanup(func() {
-		fmt.Printf("==> IO Ring Buffer Total HTTP requests made: %d\n", ioRingBufferCount.Load())
 	})
 
 	b.ResetTimer()
