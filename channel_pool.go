@@ -7,7 +7,20 @@ import (
 	"time"
 )
 
-// ChannelWorkerPool - Optimized channelWorker pool specifically for I/O bound tasks
+// ChannelWorkerPool implements a simple worker pool
+//
+// Technical features:
+//   - Native Go channels for task distribution
+//   - Flexible worker counts (any positive integer)
+//   - Lower memory overhead than RingBufferPool
+//   - Simple, reliable architecture
+//
+// Performance characteristics:
+//   - Excellent for I/O-bound workloads (HTTP, database, file operations)
+//   - Lower latency for mixed workloads
+//   - Easier debugging and profiling
+//
+// Best choice for most applications unless maximum performance is required.
 type ChannelWorkerPool struct {
 	workers      []*channelWorker
 	taskQueue    chan Task // Simple buffered channel instead of RingBuffer
@@ -17,6 +30,15 @@ type ChannelWorkerPool struct {
 	maxWorkers   int
 }
 
+// NewChannelWorkerPool creates a channel-based worker pool.
+//
+// Accepts any positive worker count (no power-of-2 requirement).
+//
+// Parameters:
+//   - maxWorkers: exact number of workers to create
+//   - queueSize: task queue capacity
+//
+// Panics if maxWorkers <= 0.
 func NewChannelWorkerPool(maxWorkers int, queueSize int) *ChannelWorkerPool {
 	if maxWorkers <= 0 {
 		panic("maxWorkers must be greater than 0")
@@ -105,6 +127,12 @@ func (p *ChannelWorkerPool) dispatchIO() {
 	}
 }
 
+// AddTask blocks until the task is queued, guaranteeing execution.
+// Uses exponential backoff if the queue is full to avoid CPU spinning
+// while ensuring the task is never dropped.
+//
+// Parameters:
+//   - t: the task function to execute
 func (p *ChannelWorkerPool) AddTask(t Task) {
 	// Blocking version - guarantees task will be added
 	backoff := time.Microsecond
@@ -126,6 +154,15 @@ func (p *ChannelWorkerPool) AddTask(t Task) {
 	}
 }
 
+// TryAddTask attempts to add a task without blocking.
+// Returns immediately with false if the queue is full or pool is shutting down.
+//
+// Parameters:
+//   - t: the task function to execute
+//
+// Returns:
+//   - true if task was queued successfully
+//   - false if queue is full or pool is shutting down
 func (p *ChannelWorkerPool) TryAddTask(t Task) bool {
 	// Check if pool is still active before attempting to add task
 	select {
@@ -141,6 +178,11 @@ func (p *ChannelWorkerPool) TryAddTask(t Task) bool {
 	}
 }
 
+// Wait blocks until all queued and running tasks have completed.
+// Checks the main queue, running task counter, and individual worker
+// channels to ensure no tasks are pending.
+//
+// Uses exponential backoff to efficiently wait without excessive CPU usage.
 func (p *ChannelWorkerPool) Wait() {
 	backoff := time.Microsecond
 	maxBackoff := 10 * time.Millisecond
@@ -178,20 +220,44 @@ func (p *ChannelWorkerPool) Wait() {
 	}
 }
 
+// Release gracefully shuts down the worker pool, stopping all workers
+// and clearing the task queue.
+//
+// After calling Release, no new tasks should be added to the pool.
+// The main task queue is closed, which will cause workers to exit
+// when they finish their current tasks.
+//
+// Should typically be called with defer after pool creation:
+//
+//	pool := NewChannelWorkerPool(50, 128, gwpool.ChannelPool)
+//	defer pool.Release()
 func (p *ChannelWorkerPool) Release() {
 	p.cancel()
 	close(p.taskQueue)
 	atomic.StoreUint64(&p.runningTasks, 0)
 }
 
+// Running returns the current number of tasks being executed by workers.
+// This count reflects tasks that have been dequeued from worker channels
+// and are actively running.
+//
+// Returns the number of currently executing tasks.
 func (p *ChannelWorkerPool) Running() int {
 	return int(atomic.LoadUint64(&p.runningTasks))
 }
 
+// WorkerCount returns the total number of workers in the pool.
+// This is the exact number specified during pool creation (no rounding).
+//
+// Returns the number of worker goroutines.
 func (p *ChannelWorkerPool) WorkerCount() int {
 	return len(p.workers)
 }
 
+// QueueSize returns the current number of tasks waiting in the main queue.
+// This does not include tasks that are queued in individual worker channels.
+//
+// Returns the number of tasks waiting to be distributed to workers.
 func (p *ChannelWorkerPool) QueueSize() int {
 	return len(p.taskQueue)
 }
