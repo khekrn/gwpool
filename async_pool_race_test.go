@@ -67,15 +67,15 @@ func TestAsyncWorkerPool_RaceConditions(t *testing.T) {
 
 		wg.Wait()
 
-		// Wait for all tasks to complete
-		for pool.QueueSize() > 0 {
-			time.Sleep(10 * time.Millisecond)
-		}
+		// Use the proper Wait() method to ensure all tasks complete
+		pool.Wait()
 
 		// All successful tasks should have been executed
-		if atomic.LoadInt64(&counter) != atomic.LoadInt64(&successful) {
+		successfulCount := atomic.LoadInt64(&successful)
+		actualCount := atomic.LoadInt64(&counter)
+		if actualCount != successfulCount {
 			t.Errorf("Mismatch: successful adds=%d, executed tasks=%d",
-				atomic.LoadInt64(&successful), atomic.LoadInt64(&counter))
+				successfulCount, actualCount)
 		}
 	})
 

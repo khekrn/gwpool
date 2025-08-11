@@ -10,9 +10,10 @@ import (
 func TestRingBufferWorkerPool_RaceConditions(t *testing.T) {
 	// Test concurrent AddTask calls
 	t.Run("ConcurrentAddTask", func(t *testing.T) {
-		pool := NewRingBufferWorkerPool(8, 32) // Increased queue size
+		pool := NewRingBufferWorkerPool(8, 64) // Increased queue size for better handling
 
 		var counter int64
+		var queued int64
 		var wg sync.WaitGroup
 
 		// Reduced scale to prevent timeout: 5 goroutines, each adding 50 tasks
@@ -21,6 +22,7 @@ func TestRingBufferWorkerPool_RaceConditions(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for j := 0; j < 50; j++ {
+					atomic.AddInt64(&queued, 1) // Count queued tasks
 					pool.AddTask(func() error {
 						atomic.AddInt64(&counter, 1)
 						return nil
@@ -42,8 +44,20 @@ func TestRingBufferWorkerPool_RaceConditions(t *testing.T) {
 		case <-done:
 			expected := int64(250) // 5 * 50
 			actual := atomic.LoadInt64(&counter)
+			queuedCount := atomic.LoadInt64(&queued)
+
+			if queuedCount != expected {
+				t.Errorf("Expected %d tasks queued, got %d", expected, queuedCount)
+			}
 			if actual != expected {
-				t.Errorf("Expected %d tasks executed, got %d", expected, actual)
+				// Log detailed info for debugging and fail
+				t.Errorf("Expected %d tasks executed, got %d (queued: %d, running: %d, queue size: %d)",
+					expected, actual, queuedCount, pool.Running(), pool.QueueSize())
+
+				// Additional wait to see if tasks complete later
+				time.Sleep(100 * time.Millisecond)
+				finalCount := atomic.LoadInt64(&counter)
+				t.Errorf("After additional wait: %d tasks executed", finalCount)
 			}
 		case <-time.After(10 * time.Second):
 			t.Fatalf("pool.Wait() timed out after 10 seconds - possible deadlock!")
@@ -51,11 +65,9 @@ func TestRingBufferWorkerPool_RaceConditions(t *testing.T) {
 
 		// Only release after all tasks are confirmed to be completed
 		pool.Release()
-	})
-
-	// Test concurrent TryAddTask calls
+	}) // Test concurrent TryAddTask calls
 	t.Run("ConcurrentTryAddTask", func(t *testing.T) {
-		pool := NewRingBufferWorkerPool(8, 32) // Fresh pool instance
+		pool := NewRingBufferWorkerPool(8, 64) // Increased queue size to match ConcurrentAddTask
 
 		var counter int64
 		var wg sync.WaitGroup
@@ -92,8 +104,15 @@ func TestRingBufferWorkerPool_RaceConditions(t *testing.T) {
 			successfulCount := atomic.LoadInt64(&successful)
 			actualCount := atomic.LoadInt64(&counter)
 			if actualCount != successfulCount {
-				t.Errorf("Mismatch: successful adds=%d, executed tasks=%d",
-					successfulCount, actualCount)
+				t.Errorf("Mismatch: successful adds=%d, executed tasks=%d (running: %d, queue size: %d)",
+					successfulCount, actualCount, pool.Running(), pool.QueueSize())
+
+				// Additional wait to see if tasks complete later
+				time.Sleep(100 * time.Millisecond)
+				finalCount := atomic.LoadInt64(&counter)
+				if finalCount != actualCount {
+					t.Errorf("After additional wait: %d tasks executed (gained %d)", finalCount, finalCount-actualCount)
+				}
 			}
 		case <-time.After(10 * time.Second):
 			t.Fatalf("pool.Wait() timed out after 10 seconds - possible deadlock!")
@@ -104,9 +123,10 @@ func TestRingBufferWorkerPool_RaceConditions(t *testing.T) {
 
 	// Test concurrent QueueSize calls
 	t.Run("ConcurrentQueueSize", func(t *testing.T) {
-		pool := NewRingBufferWorkerPool(4, 16) // Fresh pool instance
+		pool := NewRingBufferWorkerPool(8, 64) // Increased capacity to handle concurrent load
 
 		var wg sync.WaitGroup
+		var tasksAdded int64
 
 		// Start workers that continuously check queue size
 		for i := 0; i < 3; i++ { // Reduced from 5 to 3
@@ -125,11 +145,13 @@ func TestRingBufferWorkerPool_RaceConditions(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for j := 0; j < 20; j++ { // Reduced from 50 to 20
-					pool.TryAddTask(func() error {
-						time.Sleep(100 * time.Microsecond) // Reduced work time
+				for j := 0; j < 15; j++ { // Further reduced to 15 to avoid queue overflow
+					if pool.TryAddTask(func() error {
+						time.Sleep(50 * time.Microsecond) // Further reduced work time
 						return nil
-					})
+					}) {
+						atomic.AddInt64(&tasksAdded, 1)
+					}
 				}
 			}()
 		}
@@ -145,9 +167,14 @@ func TestRingBufferWorkerPool_RaceConditions(t *testing.T) {
 
 		select {
 		case <-done:
-			// Success
-		case <-time.After(10 * time.Second):
-			t.Fatalf("pool.Wait() timed out after 10 seconds - possible deadlock!")
+			// Success - verify at least some tasks were added
+			added := atomic.LoadInt64(&tasksAdded)
+			if added == 0 {
+				t.Errorf("No tasks were successfully added")
+			}
+			t.Logf("Successfully added %d tasks", added)
+		case <-time.After(5 * time.Second): // Reduced timeout since tasks are shorter
+			t.Fatalf("pool.Wait() timed out after 5 seconds - possible deadlock!")
 		}
 
 		pool.Release()

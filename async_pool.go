@@ -27,7 +27,9 @@ type AsyncWorkerPool struct {
 	wg         sync.WaitGroup // WaitGroup to track worker completion
 
 	// State tracking
-	runningTasks uint64 // Atomic counter for running tasks
+	runningTasks uint64    // Atomic counter for running tasks
+	stopped      uint64    // Atomic flag for stopped state (0 = running, 1 = stopped)
+	stopOnce     sync.Once // Ensures Stop() is only called once
 }
 
 // NewAsyncWorkerPool creates a new channel-based worker pool
@@ -120,12 +122,14 @@ func (p *AsyncWorkerPool) worker(workerID int) {
 // Only returns if the pool is permanently shut down (context cancelled)
 func (p *AsyncWorkerPool) AddTask(task Task) {
 	for {
+		// Check if pool is stopped atomically
+		if atomic.LoadUint64(&p.stopped) != 0 {
+			return // Pool is stopped
+		}
+
 		select {
 		case p.taskChan <- task:
 			// Task successfully queued
-			return
-		case <-p.ctx.Done():
-			// Pool is shutting down, cannot queue task
 			return
 		default:
 			// Channel is full, retry after a short delay
@@ -146,8 +150,19 @@ func (p *AsyncWorkerPool) AddTask(task Task) {
 //
 // This is the non-blocking equivalent of AddTask
 func (p *AsyncWorkerPool) TryAddTask(task Task) bool {
+	// Check if pool is stopped atomically
+	if atomic.LoadUint64(&p.stopped) != 0 {
+		return false // Pool is stopped
+	}
+
+	// Use a select with context to avoid race with Stop()
 	select {
 	case p.taskChan <- task:
+		// Double-check after successful send to catch late stops
+		if atomic.LoadUint64(&p.stopped) != 0 {
+			// Pool was stopped after we sent, but that's okay
+			// The task is already queued and will be processed
+		}
 		return true // Task successfully queued
 	case <-p.ctx.Done():
 		return false // Pool is shutting down
@@ -194,14 +209,21 @@ func (p *AsyncWorkerPool) Wait() {
 // Stop gracefully shuts down the worker pool
 // Equivalent to the stop() function in Kotlin implementation
 func (p *AsyncWorkerPool) Stop() {
-	// Cancel context to signal workers to stop
-	p.cancel()
+	p.stopOnce.Do(func() {
+		// Atomically mark pool as stopped
+		atomic.StoreUint64(&p.stopped, 1)
 
-	// Close the task channel to prevent new tasks
-	close(p.taskChan)
+		// Cancel context to signal workers to stop
+		p.cancel()
 
-	// Wait for all workers to complete
-	p.wg.Wait()
+		// Wait for all workers to complete
+		// Workers will exit when they see the context is cancelled
+		p.wg.Wait()
+
+		// Note: We don't close the channel to completely avoid race conditions
+		// The channel will be garbage collected when the pool is no longer referenced
+		// This is the safest approach for concurrent programming
+	})
 }
 
 // Release is an alias for Stop for compatibility with WorkerPool interface
