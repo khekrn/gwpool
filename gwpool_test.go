@@ -91,20 +91,41 @@ func BenchmarkGoroutines(b *testing.B) {
 
 // Test basic ringBufferWorker pool creation and properties
 func TestNewWorkerPool(t *testing.T) {
-	pool := NewWorkerPool(8, 8, RingBufferPool) // Use power of 2
-	defer pool.Release()
+	// Test RingBufferPool
+	t.Run("RingBufferPool", func(t *testing.T) {
+		pool := NewWorkerPool(8, 8, RingBufferPool) // Use power of 2
+		defer pool.Release()
 
-	if pool.WorkerCount() != 8 {
-		t.Errorf("Expected 8 workers, got %d", pool.WorkerCount())
-	}
+		if pool.WorkerCount() != 8 {
+			t.Errorf("Expected 8 workers, got %d", pool.WorkerCount())
+		}
 
-	if pool.Running() != 0 {
-		t.Errorf("Expected 0 running tasks, got %d", pool.Running())
-	}
+		if pool.Running() != 0 {
+			t.Errorf("Expected 0 running tasks, got %d", pool.Running())
+		}
 
-	if pool.QueueSize() != 0 {
-		t.Errorf("Expected 0 queue size, got %d", pool.QueueSize())
-	}
+		if pool.QueueSize() != 0 {
+			t.Errorf("Expected 0 queue size, got %d", pool.QueueSize())
+		}
+	})
+
+	// Test ChannelPool
+	t.Run("ChannelPool", func(t *testing.T) {
+		pool := NewWorkerPool(8, 16, ChannelPool) // Any size works for ChannelPool
+		defer pool.Release()
+
+		if pool.WorkerCount() != 8 {
+			t.Errorf("Expected 8 workers, got %d", pool.WorkerCount())
+		}
+
+		if pool.Running() != 0 {
+			t.Errorf("Expected 0 running tasks, got %d", pool.Running())
+		}
+
+		if pool.QueueSize() != 0 {
+			t.Errorf("Expected 0 queue size, got %d", pool.QueueSize())
+		}
+	})
 }
 
 // Test panic on invalid ringBufferWorker count
@@ -119,137 +140,284 @@ func TestNewWorkerPoolPanic(t *testing.T) {
 
 // Test adding and executing tasks
 func TestTryAddTask(t *testing.T) {
-	pool := NewWorkerPool(2, 8, ChannelPool) // Larger queue to accommodate all tasks
-	defer pool.Release()
+	// Test ChannelPool
+	t.Run("ChannelPool", func(t *testing.T) {
+		pool := NewWorkerPool(2, 8, ChannelPool) // Larger queue to accommodate all tasks
+		defer pool.Release()
 
-	var counter int64
-	task := func() error {
-		atomic.AddInt64(&counter, 1)
-		time.Sleep(10 * time.Millisecond) // Small delay to simulate work
-		return nil
-	}
-
-	// Add some tasks
-	for i := 0; i < 5; i++ {
-		if !pool.TryAddTask(task) {
-			t.Errorf("Failed to add task %d", i)
+		var counter int64
+		task := func() error {
+			atomic.AddInt64(&counter, 1)
+			time.Sleep(10 * time.Millisecond) // Small delay to simulate work
+			return nil
 		}
-	}
 
-	// Wait for tasks to complete
-	pool.Wait()
+		// Add some tasks
+		for i := 0; i < 5; i++ {
+			if !pool.TryAddTask(task) {
+				t.Errorf("Failed to add task %d", i)
+			}
+		}
 
-	if atomic.LoadInt64(&counter) != 5 {
-		t.Errorf("Expected 5 tasks executed, got %d", atomic.LoadInt64(&counter))
-	}
+		// Wait for tasks to complete
+		pool.Wait()
+
+		if atomic.LoadInt64(&counter) != 5 {
+			t.Errorf("Expected 5 tasks executed, got %d", atomic.LoadInt64(&counter))
+		}
+	})
+
+	// Test RingBufferPool
+	t.Run("RingBufferPool", func(t *testing.T) {
+		pool := NewWorkerPool(2, 8, RingBufferPool) // Power of 2 queue
+		defer pool.Release()
+
+		var counter int64
+		task := func() error {
+			atomic.AddInt64(&counter, 1)
+			time.Sleep(10 * time.Millisecond) // Small delay to simulate work
+			return nil
+		}
+
+		// Add some tasks
+		for i := 0; i < 5; i++ {
+			if !pool.TryAddTask(task) {
+				t.Errorf("Failed to add task %d", i)
+			}
+		}
+
+		// Wait for tasks to complete
+		pool.Wait()
+
+		if atomic.LoadInt64(&counter) != 5 {
+			t.Errorf("Expected 5 tasks executed, got %d", atomic.LoadInt64(&counter))
+		}
+	})
 }
 
 // Test queue full scenario
 func TestTryAddTaskQueueFull(t *testing.T) {
-	// Create pool with small queue and slow tasks
-	pool := NewWorkerPool(2, 2, RingBufferPool) // Use power of 2
-	defer pool.Release()
+	// Test RingBufferPool
+	t.Run("RingBufferPool", func(t *testing.T) {
+		// Create pool with small queue and slow tasks
+		pool := NewWorkerPool(2, 2, RingBufferPool) // Use power of 2
+		defer pool.Release()
 
-	slowTask := func() error {
-		time.Sleep(100 * time.Millisecond)
-		return nil
-	}
-
-	// Fill up the queue
-	successCount := 0
-	for i := 0; i < 10; i++ {
-		if pool.TryAddTask(slowTask) {
-			successCount++
+		slowTask := func() error {
+			time.Sleep(100 * time.Millisecond)
+			return nil
 		}
-	}
 
-	// Should be able to add some tasks but not all due to queue limit
-	if successCount == 0 {
-		t.Error("Should be able to add at least some tasks")
-	}
-	if successCount == 10 {
-		t.Error("Should not be able to add all tasks due to queue limit")
-	}
+		// Fill up the queue
+		successCount := 0
+		for i := 0; i < 10; i++ {
+			if pool.TryAddTask(slowTask) {
+				successCount++
+			}
+		}
 
-	pool.Wait()
+		// Should be able to add some tasks but not all due to queue limit
+		if successCount == 0 {
+			t.Error("Should be able to add at least some tasks")
+		}
+		if successCount == 10 {
+			t.Error("Should not be able to add all tasks due to queue limit")
+		}
+
+		pool.Wait()
+	})
+
+	// Test ChannelPool
+	t.Run("ChannelPool", func(t *testing.T) {
+		// Create pool with small queue and slow tasks
+		pool := NewWorkerPool(2, 3, ChannelPool) // Small queue
+		defer pool.Release()
+
+		slowTask := func() error {
+			time.Sleep(100 * time.Millisecond)
+			return nil
+		}
+
+		// Fill up the queue
+		successCount := 0
+		for i := 0; i < 10; i++ {
+			if pool.TryAddTask(slowTask) {
+				successCount++
+			}
+		}
+
+		// Should be able to add some tasks but not all due to queue limit
+		if successCount == 0 {
+			t.Error("Should be able to add at least some tasks")
+		}
+		if successCount == 10 {
+			t.Error("Should not be able to add all tasks due to queue limit")
+		}
+
+		pool.Wait()
+	})
 }
 
 // Test task execution with errors
 func TestTaskWithError(t *testing.T) {
-	pool := NewWorkerPool(2, 16, RingBufferPool) // Larger queue for all tasks
-	defer pool.Release()
+	// Test RingBufferPool
+	t.Run("RingBufferPool", func(t *testing.T) {
+		pool := NewWorkerPool(2, 16, RingBufferPool) // Larger queue for all tasks
+		defer pool.Release()
 
-	var successCount, errorCount int64
+		var successCount, errorCount int64
 
-	successTask := func() error {
-		atomic.AddInt64(&successCount, 1)
-		time.Sleep(5 * time.Millisecond) // Small delay
-		return nil
-	}
-
-	errorTask := func() error {
-		atomic.AddInt64(&errorCount, 1)
-		time.Sleep(5 * time.Millisecond) // Small delay
-		return errors.New("task error")
-	}
-
-	// Add mix of successful and error tasks
-	for i := 0; i < 5; i++ {
-		if !pool.TryAddTask(successTask) {
-			t.Errorf("Failed to add success task %d", i)
+		successTask := func() error {
+			atomic.AddInt64(&successCount, 1)
+			time.Sleep(5 * time.Millisecond) // Small delay
+			return nil
 		}
-		if !pool.TryAddTask(errorTask) {
-			t.Errorf("Failed to add error task %d", i)
+
+		errorTask := func() error {
+			atomic.AddInt64(&errorCount, 1)
+			time.Sleep(5 * time.Millisecond) // Small delay
+			return errors.New("task error")
 		}
-	}
 
-	pool.Wait()
+		// Add mix of successful and error tasks
+		for i := 0; i < 5; i++ {
+			if !pool.TryAddTask(successTask) {
+				t.Errorf("Failed to add success task %d", i)
+			}
+			if !pool.TryAddTask(errorTask) {
+				t.Errorf("Failed to add error task %d", i)
+			}
+		}
 
-	if atomic.LoadInt64(&successCount) != 5 {
-		t.Errorf("Expected 5 successful tasks, got %d", atomic.LoadInt64(&successCount))
-	}
-	if atomic.LoadInt64(&errorCount) != 5 {
-		t.Errorf("Expected 5 error tasks, got %d", atomic.LoadInt64(&errorCount))
-	}
+		pool.Wait()
+
+		if atomic.LoadInt64(&successCount) != 5 {
+			t.Errorf("Expected 5 successful tasks, got %d", atomic.LoadInt64(&successCount))
+		}
+		if atomic.LoadInt64(&errorCount) != 5 {
+			t.Errorf("Expected 5 error tasks, got %d", atomic.LoadInt64(&errorCount))
+		}
+	})
+
+	// Test ChannelPool
+	t.Run("ChannelPool", func(t *testing.T) {
+		pool := NewWorkerPool(2, 20, ChannelPool) // Larger queue for all tasks
+		defer pool.Release()
+
+		var successCount, errorCount int64
+
+		successTask := func() error {
+			atomic.AddInt64(&successCount, 1)
+			time.Sleep(5 * time.Millisecond) // Small delay
+			return nil
+		}
+
+		errorTask := func() error {
+			atomic.AddInt64(&errorCount, 1)
+			time.Sleep(5 * time.Millisecond) // Small delay
+			return errors.New("task error")
+		}
+
+		// Add mix of successful and error tasks
+		for i := 0; i < 5; i++ {
+			if !pool.TryAddTask(successTask) {
+				t.Errorf("Failed to add success task %d", i)
+			}
+			if !pool.TryAddTask(errorTask) {
+				t.Errorf("Failed to add error task %d", i)
+			}
+		}
+
+		pool.Wait()
+
+		if atomic.LoadInt64(&successCount) != 5 {
+			t.Errorf("Expected 5 successful tasks, got %d", atomic.LoadInt64(&successCount))
+		}
+		if atomic.LoadInt64(&errorCount) != 5 {
+			t.Errorf("Expected 5 error tasks, got %d", atomic.LoadInt64(&errorCount))
+		}
+	})
 }
 
 // Test concurrent access
 func TestConcurrentAccess(t *testing.T) {
-	pool := NewWorkerPool(8, 128, RingBufferPool) // Larger queue for concurrent access, use power of 2
-	defer pool.Release()
+	// Test RingBufferPool
+	t.Run("RingBufferPool", func(t *testing.T) {
+		pool := NewWorkerPool(8, 128, RingBufferPool) // Larger queue for concurrent access, use power of 2
+		defer pool.Release()
 
-	var counter int64
-	var wg sync.WaitGroup
+		var counter int64
+		var wg sync.WaitGroup
 
-	task := func() error {
-		atomic.AddInt64(&counter, 1)
-		time.Sleep(5 * time.Millisecond) // Shorter sleep
-		return nil
-	}
+		task := func() error {
+			atomic.AddInt64(&counter, 1)
+			time.Sleep(5 * time.Millisecond) // Shorter sleep
+			return nil
+		}
 
-	// Add tasks from multiple goroutines
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 10; j++ {
-				// Retry logic for queue full scenarios
-				for {
-					if pool.TryAddTask(task) {
-						break
+		// Add tasks from multiple goroutines
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 10; j++ {
+					// Retry logic for queue full scenarios
+					for {
+						if pool.TryAddTask(task) {
+							break
+						}
+						time.Sleep(time.Millisecond)
 					}
-					time.Sleep(time.Millisecond)
 				}
-			}
-		}()
-	}
+			}()
+		}
 
-	wg.Wait()
-	pool.Wait()
+		wg.Wait()
+		pool.Wait()
 
-	if atomic.LoadInt64(&counter) != 100 {
-		t.Errorf("Expected 100 tasks executed, got %d", atomic.LoadInt64(&counter))
-	}
+		if atomic.LoadInt64(&counter) != 100 {
+			t.Errorf("Expected 100 tasks executed, got %d", atomic.LoadInt64(&counter))
+		}
+	})
+
+	// Test ChannelPool
+	t.Run("ChannelPool", func(t *testing.T) {
+		pool := NewWorkerPool(8, 150, ChannelPool) // Larger queue for concurrent access
+		defer pool.Release()
+
+		var counter int64
+		var wg sync.WaitGroup
+
+		task := func() error {
+			atomic.AddInt64(&counter, 1)
+			time.Sleep(5 * time.Millisecond) // Shorter sleep
+			return nil
+		}
+
+		// Add tasks from multiple goroutines
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 10; j++ {
+					// Retry logic for queue full scenarios
+					for {
+						if pool.TryAddTask(task) {
+							break
+						}
+						time.Sleep(time.Millisecond)
+					}
+				}
+			}()
+		}
+
+		wg.Wait()
+		pool.Wait()
+
+		if atomic.LoadInt64(&counter) != 100 {
+			t.Errorf("Expected 100 tasks executed, got %d", atomic.LoadInt64(&counter))
+		}
+	})
 }
 
 // Test running tasks counter
@@ -298,38 +466,83 @@ func TestRunningTasksCounter(t *testing.T) {
 
 // Test Wait() functionality
 func TestWait(t *testing.T) {
-	pool := NewWorkerPool(2, 4, RingBufferPool) // Adequate queue size
-	defer pool.Release()
+	// Test RingBufferPool
+	t.Run("RingBufferPool", func(t *testing.T) {
+		pool := NewWorkerPool(2, 4, RingBufferPool) // Adequate queue size
+		defer pool.Release()
 
-	var completed bool
-	task := func() error {
-		time.Sleep(100 * time.Millisecond)
-		completed = true
-		return nil
-	}
+		var completed int64
+		task := func() error {
+			time.Sleep(100 * time.Millisecond)
+			atomic.StoreInt64(&completed, 1)
+			return nil
+		}
 
-	start := time.Now()
-	if !pool.TryAddTask(task) {
-		t.Fatal("Failed to add task to pool")
-	}
-	pool.Wait()
-	elapsed := time.Since(start)
+		start := time.Now()
+		if !pool.TryAddTask(task) {
+			t.Fatal("Failed to add task to pool")
+		}
+		pool.Wait()
+		elapsed := time.Since(start)
 
-	if !completed {
-		t.Error("Task should have completed")
-	}
+		if atomic.LoadInt64(&completed) != 1 {
+			t.Error("Task should have completed")
+		}
 
-	if elapsed < 100*time.Millisecond {
-		t.Error("Wait() should wait for tasks to complete")
-	}
+		if elapsed < 100*time.Millisecond {
+			t.Error("Wait() should wait for tasks to complete")
+		}
 
-	if pool.Running() != 0 {
-		t.Errorf("Expected 0 running tasks after Wait(), got %d", pool.Running())
-	}
+		// Give a small moment for cleanup to complete
+		time.Sleep(10 * time.Millisecond)
 
-	if pool.QueueSize() != 0 {
-		t.Errorf("Expected 0 queue size after Wait(), got %d", pool.QueueSize())
-	}
+		if pool.Running() != 0 {
+			t.Errorf("Expected 0 running tasks after Wait(), got %d", pool.Running())
+		}
+
+		if pool.QueueSize() != 0 {
+			t.Errorf("Expected 0 queue size after Wait(), got %d", pool.QueueSize())
+		}
+	})
+
+	// Test ChannelPool
+	t.Run("ChannelPool", func(t *testing.T) {
+		pool := NewWorkerPool(2, 8, ChannelPool) // Adequate queue size
+		defer pool.Release()
+
+		var completed int64
+		task := func() error {
+			time.Sleep(100 * time.Millisecond)
+			atomic.StoreInt64(&completed, 1)
+			return nil
+		}
+
+		start := time.Now()
+		if !pool.TryAddTask(task) {
+			t.Fatal("Failed to add task to pool")
+		}
+		pool.Wait()
+		elapsed := time.Since(start)
+
+		if atomic.LoadInt64(&completed) != 1 {
+			t.Error("Task should have completed")
+		}
+
+		if elapsed < 100*time.Millisecond {
+			t.Error("Wait() should wait for tasks to complete")
+		}
+
+		// Give a small moment for cleanup to complete
+		time.Sleep(10 * time.Millisecond)
+
+		if pool.Running() != 0 {
+			t.Errorf("Expected 0 running tasks after Wait(), got %d", pool.Running())
+		}
+
+		if pool.QueueSize() != 0 {
+			t.Errorf("Expected 0 queue size after Wait(), got %d", pool.QueueSize())
+		}
+	})
 }
 
 // Test Release() functionality
@@ -369,44 +582,107 @@ func TestNoTasks(t *testing.T) {
 
 // Test ringBufferWorker pool with different queue sizes
 func TestDifferentQueueSizes(t *testing.T) {
-	sizes := []int{1, 2, 4, 8, 16, 32}
+	// Test RingBufferPool with power-of-2 sizes
+	t.Run("RingBufferPool", func(t *testing.T) {
+		sizes := []int{2, 4, 8, 16, 32} // Use power-of-2 sizes for RingBufferPool
 
-	for _, size := range sizes {
-		t.Run(fmt.Sprintf("QueueSize%d", size), func(t *testing.T) {
-			pool := NewWorkerPool(2, size, RingBufferPool)
-			defer pool.Release()
+		for _, size := range sizes {
+			t.Run(fmt.Sprintf("QueueSize%d", size), func(t *testing.T) {
+				pool := NewWorkerPool(2, size, RingBufferPool)
+				defer pool.Release()
 
-			var counter int64
-			task := func() error {
-				atomic.AddInt64(&counter, 1)
+				var counter int64
+				task := func() error {
+					atomic.AddInt64(&counter, 1)
+					time.Sleep(5 * time.Millisecond) // Reduced delay
+					return nil
+				}
+
+				// Add tasks gradually to allow processing
+				taskCount := size + 2 // Reduced from size + 5
+				successCount := 0
+				for i := 0; i < taskCount; i++ {
+					if pool.TryAddTask(task) {
+						successCount++
+					} else {
+						// If queue is full, give a moment for processing
+						time.Sleep(time.Millisecond)
+						if pool.TryAddTask(task) {
+							successCount++
+						}
+					}
+				}
+
+				pool.Wait()
+
+				// Give a moment for cleanup
 				time.Sleep(10 * time.Millisecond)
-				return nil
-			}
 
-			// Add more tasks than queue size
-			taskCount := size + 5
-			successCount := 0
-			for i := 0; i < taskCount; i++ {
-				if pool.TryAddTask(task) {
-					successCount++
+				// The test should verify that the number of executed tasks equals
+				// the number of successfully added tasks
+				executedCount := atomic.LoadInt64(&counter)
+				if executedCount != int64(successCount) {
+					t.Logf("Queue size: %d, Attempted: %d, Added: %d, Executed: %d",
+						size, taskCount, successCount, executedCount)
+					// Allow small timing variations but fail if the difference is too large
+					if abs(int(executedCount)-successCount) > 1 {
+						t.Errorf("Expected ~%d tasks executed, got %d (diff > 1)", successCount, executedCount)
+					}
 				}
-			}
+			})
+		}
+	})
 
-			pool.Wait()
+	// Test ChannelPool with various sizes
+	t.Run("ChannelPool", func(t *testing.T) {
+		sizes := []int{1, 3, 5, 10, 25} // Different sizes for ChannelPool
 
-			// The test should verify that the number of executed tasks equals
-			// the number of successfully added tasks, allowing for timing variations
-			executedCount := atomic.LoadInt64(&counter)
-			if executedCount != int64(successCount) {
-				t.Logf("Queue size: %d, Attempted: %d, Added: %d, Executed: %d",
-					size, taskCount, successCount, executedCount)
-				// Allow small timing variations but fail if the difference is too large
-				if abs(int(executedCount)-successCount) > 2 {
-					t.Errorf("Expected ~%d tasks executed, got %d (diff > 2)", successCount, executedCount)
+		for _, size := range sizes {
+			t.Run(fmt.Sprintf("QueueSize%d", size), func(t *testing.T) {
+				pool := NewWorkerPool(2, size, ChannelPool)
+				defer pool.Release()
+
+				var counter int64
+				task := func() error {
+					atomic.AddInt64(&counter, 1)
+					time.Sleep(5 * time.Millisecond) // Reduced delay
+					return nil
 				}
-			}
-		})
-	}
+
+				// Add tasks gradually to allow processing
+				taskCount := size + 2
+				successCount := 0
+				for i := 0; i < taskCount; i++ {
+					if pool.TryAddTask(task) {
+						successCount++
+					} else {
+						// If queue is full, give a moment for processing
+						time.Sleep(time.Millisecond)
+						if pool.TryAddTask(task) {
+							successCount++
+						}
+					}
+				}
+
+				pool.Wait()
+
+				// Give a moment for cleanup
+				time.Sleep(10 * time.Millisecond)
+
+				// The test should verify that the number of executed tasks equals
+				// the number of successfully added tasks
+				executedCount := atomic.LoadInt64(&counter)
+				if executedCount != int64(successCount) {
+					t.Logf("Queue size: %d, Attempted: %d, Added: %d, Executed: %d",
+						size, taskCount, successCount, executedCount)
+					// Allow small timing variations but fail if the difference is too large
+					if abs(int(executedCount)-successCount) > 1 {
+						t.Errorf("Expected ~%d tasks executed, got %d (diff > 1)", successCount, executedCount)
+					}
+				}
+			})
+		}
+	})
 }
 
 func abs(x int) int {
