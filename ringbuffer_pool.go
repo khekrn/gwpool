@@ -244,6 +244,13 @@ func (p *RingBufferWorkerPool) Wait() {
 //	defer pool.Release()
 func (p *RingBufferWorkerPool) Release() {
 	p.cancel()
+
+	// Wait for all currently running tasks to complete to avoid race condition
+	// This prevents workers from decrementing runningTasks after we reset it
+	for atomic.LoadUint64(&p.runningTasks) > 0 {
+		runtime.Gosched()
+	}
+
 	// Clear the main queue
 	for {
 		if _, ok := p.taskQueue.Dequeue(); !ok {
@@ -264,6 +271,7 @@ func (p *RingBufferWorkerPool) Release() {
 		}
 	nextWorker:
 	}
+	// Reset counter after all workers have stopped (safe now)
 	atomic.StoreUint64(&p.runningTasks, 0)
 }
 
@@ -305,10 +313,18 @@ func (w *ringBufferWorker) start() {
 		select {
 		case task := <-w.taskChan:
 			atomic.AddUint64(&w.pool.runningTasks, 1)
-			// Execute task with proper error handling
+			// Execute task with proper error handling and guaranteed counter decrement
 			func() {
+				defer func() {
+					// Always decrement counter, even if task panics
+					atomic.AddUint64(&w.pool.runningTasks, ^uint64(0))
+					// Recover from panics to keep worker alive
+					if r := recover(); r != nil {
+						// Log or handle panic as needed
+						_ = r
+					}
+				}()
 				task()
-				atomic.AddUint64(&w.pool.runningTasks, ^uint64(0))
 			}()
 		case <-w.pool.ctx.Done():
 			return
