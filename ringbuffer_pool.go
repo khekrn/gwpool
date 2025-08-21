@@ -10,7 +10,7 @@ import (
 // RingBufferWorkerPool implements a high-performance worker pool optimized for async tasks.
 //
 // Technical features:
-//   - Lock-free ring buffer for minimal contention
+//   - Ring buffer for minimal contention
 //   - Power-of-2 worker counts for bitwise optimizations
 //   - Cache-aligned struct layout (64-byte alignment)
 //   - Automatic worker count adjustment to nearest power of 2
