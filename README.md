@@ -11,7 +11,7 @@ A high-performance, production-ready worker pool library for Go applications off
 - **Two High-Performance Implementations**:
 
   - **ChannelPool**: Flexible, general-purpose worker pool using Go channels
-  - **RingBufferPool**: 20% faster lock-free implementation with ring buffer optimization
+  - **RingBufferPool**: 20% faster implementation with ring buffer implementation
 
 - **Dual Task Submission Methods**:
 
@@ -34,7 +34,7 @@ Based on HTTP benchmark tests with 2,500 concurrent requests:
 | ChannelPool        | 125.24s        | Baseline         |
 | Limited Goroutines | 125.44s        | -0.2%            |
 
-_RingBufferPool is optimized for maximum throughput with power-of-2 optimizations and lock-free operations._
+_RingBufferPool is optimized for maximum throughput with power-of-2 optimizations._
 
 ## 📦 Installation
 
@@ -117,7 +117,7 @@ pool := gwpool.NewWorkerPool(64, 128, gwpool.RingBufferPool)  // Workers auto-ro
 
 **Characteristics:**
 
-- Lock-free ring buffer implementation
+- Ring buffer implementation
 - Worker count automatically rounded to nearest power-of-2
 - Cache-aligned data structures
 - Bitwise optimizations for worker selection

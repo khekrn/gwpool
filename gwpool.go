@@ -57,11 +57,11 @@ const (
 func NewWorkerPool(maxWorkers int, queueSize int, poolType PoolType) WorkerPool {
 	switch poolType {
 	case ChannelPool:
-		return NewChannelWorkerPool(maxWorkers, queueSize)
+		return NewAsyncWorkerPool(maxWorkers, queueSize)
 	case RingBufferPool:
 		return NewRingBufferWorkerPool(maxWorkers, queueSize)
 	default:
 		// Default to channel-based pool
-		return NewChannelWorkerPool(maxWorkers, queueSize)
+		return NewAsyncWorkerPool(maxWorkers, queueSize)
 	}
 }
