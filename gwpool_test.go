@@ -694,147 +694,86 @@ func abs(x int) int {
 
 // BenchmarkHTTPRingBufferPool benchmarks the ringBufferWorker pool with HTTP I/O tasks
 func BenchmarkHTTPRingBufferPool(b *testing.B) {
-	// Reset counter at start
-	var gwPoolHttpCount atomic.Uint64
+	var successCount atomic.Uint64
+	var failCount atomic.Uint64
+	totalCount := 5000
 
-	pool := NewWorkerPool(100, 5000, RingBufferPool) // More workers for I/O bound tasks
-	//pool := NewWorkerPool(100)
-	defer pool.Release()
-
-	// HTTP client for making requests
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 
-	// Task that makes HTTP request to simulate I/O
 	httpTask := func() error {
-		gwPoolHttpCount.Add(1) // Count all attempts, regardless of success/failure
 		resp, err := client.Get("http://localhost:8080/io-task?delay=5000")
 		if err != nil {
+			failCount.Add(1)
 			return err
 		}
 		defer resp.Body.Close()
-
 		if resp.StatusCode != http.StatusOK {
+			failCount.Add(1)
 			return fmt.Errorf("HTTP error: %d", resp.StatusCode)
 		}
+		successCount.Add(1)
 		return nil
 	}
 
-	// Run at least 5000 iterations as requested
-	iterations := 2500
-	if b.N > iterations {
-		iterations = b.N
-	}
-
-	// Add cleanup function to print total at the very end
-	b.Cleanup(func() {
-		fmt.Printf("==> GwPool Total HTTP requests made: %d\n", gwPoolHttpCount.Load())
-	})
+	pool := NewWorkerPool(100, 5002, RingBufferPool)
+	defer pool.Release()
 
 	b.ResetTimer()
-	for i := 0; i < iterations; i++ {
-		if !pool.TryAddTask(httpTask) {
-			// If queue is full, wait a bit and retry
-			time.Sleep(time.Millisecond)
-			i-- // Retry this iteration
+	added := 0
+	for i := 0; i < totalCount; i++ {
+		if pool.TryAddTask(httpTask) {
+			added++
 		}
 	}
 	pool.Wait()
 	b.StopTimer()
-}
 
-// BenchmarkHTTPLimitedGoroutines benchmarks limited goroutines with HTTP I/O
-func BenchmarkHTTPLimitedGoroutines(b *testing.B) {
-	// Reset counter at start
-	var limitedGoroutinesCount atomic.Uint64
-
-	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 100) // Limit to 100 concurrent goroutines
-
-	// HTTP client for making requests
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	// Run at least 5000 iterations as requested
-	iterations := 2500
-	if b.N > iterations {
-		iterations = b.N
-	}
-
-	// Add cleanup function to print total at the very end
 	b.Cleanup(func() {
-		fmt.Printf("==> Limited Goroutines Total requests made: %d\n", limitedGoroutinesCount.Load())
+		fmt.Printf("==> GwPool: Success: %d, Fail: %d, Added: %d, b.N: %d\n", successCount.Load(), failCount.Load(), added, totalCount)
 	})
-
-	b.ResetTimer()
-	wg.Add(iterations)
-	for i := 0; i < iterations; i++ {
-		go func() {
-			defer wg.Done()
-			semaphore <- struct{}{}        // Acquire semaphore
-			defer func() { <-semaphore }() // Release semaphore
-
-			limitedGoroutinesCount.Add(1) // Count all attempts
-			resp, err := client.Get("http://localhost:8080/io-task?delay=5000")
-			if err != nil {
-				return
-			}
-			defer resp.Body.Close()
-		}()
-	}
-	wg.Wait()
-	b.StopTimer()
 }
 
 // BenchmarkHttpChannelPool benchmarks the channel worker pool
 func BenchmarkHttpChannelPool(b *testing.B) {
-	// Reset counter at start
-	var ioOptimizedCount atomic.Uint64
+	var successCount atomic.Uint64
+	var failCount atomic.Uint64
+	totalCount := 5000
 
-	pool := NewWorkerPool(100, 5000, ChannelPool)
-	defer pool.Release()
-
-	// HTTP client for making requests
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 
-	// Task that makes HTTP request to simulate I/O
 	httpTask := func() error {
-		ioOptimizedCount.Add(1) // Count all attempts, regardless of success/failure
 		resp, err := client.Get("http://localhost:8080/io-task?delay=5000")
 		if err != nil {
+			failCount.Add(1)
 			return err
 		}
 		defer resp.Body.Close()
-
 		if resp.StatusCode != http.StatusOK {
+			failCount.Add(1)
 			return fmt.Errorf("HTTP error: %d", resp.StatusCode)
 		}
+		successCount.Add(1)
 		return nil
 	}
 
-	// Run at least 5000 iterations as requested
-	iterations := 2500
-	if b.N > iterations {
-		iterations = b.N
-	}
-
-	// Add cleanup function to print total at the very end
-	b.Cleanup(func() {
-		fmt.Printf("==> IO Optimized Total HTTP requests made: %d\n", ioOptimizedCount.Load())
-	})
+	pool := NewWorkerPool(100, 5000, ChannelPool)
+	defer pool.Release()
 
 	b.ResetTimer()
-	for i := 0; i < iterations; i++ {
-		if !pool.TryAddTask(httpTask) {
-			// If queue is full, wait a bit and retry
-			time.Sleep(time.Millisecond)
-			i-- // Retry this iteration
+	added := 0
+	for i := 0; i < totalCount; i++ {
+		if pool.TryAddTask(httpTask) {
+			added++
 		}
 	}
 	pool.Wait()
 	b.StopTimer()
+
+	b.Cleanup(func() {
+		fmt.Printf("==> IO Optimized: Success: %d, Fail: %d, Added: %d, b.N: %d\n", successCount.Load(), failCount.Load(), added, totalCount)
+	})
 }

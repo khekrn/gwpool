@@ -29,6 +29,8 @@ func simulateIOTask(delay time.Duration, taskID string) APIResponse {
 	// Simulate I/O operation (database query, file read, network call, etc.)
 	time.Sleep(delay)
 
+	fmt.Println("Processed I/O task:", taskID)
+
 	return APIResponse{
 		Message:   "I/O task completed successfully",
 		Delay:     delay,
