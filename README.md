@@ -9,12 +9,10 @@ A high-performance, production-ready worker pool library for Go applications off
 ## 🚀 Features
 
 - **Two High-Performance Implementations**:
-
   - **ChannelPool**: Flexible, general-purpose worker pool using Go channels
   - **RingBufferPool**: 20% faster implementation with ring buffer implementation
 
 - **Dual Task Submission Methods**:
-
   - **`AddTask()`**: Blocking method that guarantees task execution
   - **`TryAddTask()`**: Non-blocking method for high-throughput scenarios
 
@@ -503,7 +501,7 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for 
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a pull request.
 
 ## 📞 Support
 
